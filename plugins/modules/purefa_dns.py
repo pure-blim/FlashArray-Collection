@@ -62,6 +62,14 @@ options:
     - A virtual network interface (vif)
     type: str
     version_added: 1.14.0
+  context:
+    description:
+    - Name of fleet member on which to perform the dns operation.
+    - This requires the array receiving the request is a member of a fleet
+      and the context name to be a member of the same fleet.
+    type: str
+    default: ""
+    version_added: '1.37.0'
 extends_documentation_fragment:
 - purestorage.flasharray.purestorage.fa
 """
@@ -120,6 +128,7 @@ from ansible_collections.purestorage.flasharray.plugins.module_utils.purefa impo
 )
 
 MULTIPLE_DNS = "2.15"
+CONTEXT_API_VERSION = "2.48"
 
 
 def remove(duplicate):
@@ -140,8 +149,13 @@ def _get_source(module, array):
 
 def delete_dns(module, array):
     """Delete DNS settings"""
+    api_version = array.get_rest_version()
     changed = False
-    current_dns = list(array.get_dns().items)[0]
+    if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
+        dns_list = array.get_dns(context_names=[module.params["context"]])
+    else:
+        dns_list = array.get_dns()
+    current_dns = list(dns_list.items)[0]
     if getattr(current_dns, "domain", None) in ["", None] and getattr(
         current_dns, "nameservers", None
     ) in [[""], None]:
@@ -149,7 +163,11 @@ def delete_dns(module, array):
     else:
         changed = True
         if not module.check_mode:
-            res = array.delete_dns(names=["management"])
+            if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
+                res = array.delete_dns(names=["management"],
+                    context_names=[module.params["context"]])
+            else:
+                res = array.delete_dns(names=["management"])
         if res.status_code != 200:
             module.fail_json(
                 msg="Delete DNS settigs failed. Error: {0}".format(
@@ -161,20 +179,35 @@ def delete_dns(module, array):
 
 def create_dns(module, array):
     """Set DNS settings"""
+    api_version = array.get_rest_version()
     changed = False
-    current_dns = list(array.get_dns().items)[0]
+    if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
+        dns_list = array.get_dns(context_names=[module.params["context"]])
+    else:
+        dns_list = array.get_dns()
+    current_dns = list(dns_list.items)[0]
     if current_dns["domain"] != module.params["domain"] or sorted(
         module.params["nameservers"]
     ) != sorted(current_dns["nameservers"]):
         changed = True
         if not module.check_mode:
-            res = array.patch_dns(
-                names=["management"],
-                dns=flasharray.DnsPatch(
-                    domain=module.params["domain"],
-                    nameservers=module.params["nameservers"][0:3],
-                ),
-            )
+            if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
+                res = array.patch_dns(
+                    names=["management"],
+                    dns=flasharray.DnsPatch(
+                        domain=module.params["domain"],
+                        nameservers=module.params["nameservers"][0:3],
+                    ),
+                    context_names=[module.params["context"]],
+                )
+            else:
+                res = array.patch_dns(
+                    names=["management"],
+                    dns=flasharray.DnsPatch(
+                        domain=module.params["domain"],
+                        nameservers=module.params["nameservers"][0:3],
+                    ),
+                )
         if res.status_code != 200:
             module.fail_json(
                 msg="Set DNS settings failed. Error: {0}".format(res.errors[0].message)
@@ -302,6 +335,7 @@ def main():
             domain=dict(type="str"),
             source=dict(type="str"),
             nameservers=dict(type="list", elements="str"),
+            context=dict(type="str", default=""),
         )
     )
 
